@@ -1,0 +1,169 @@
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const mongoose = require('mongoose');
+const fetch = require('node-fetch');
+require('dotenv').config();
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Kết nối MongoDB
+mongoose.connect(process.env.MONGO_URL)
+  .then(() => console.log('MongoDB connected to product-blockchain'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// Models
+const productSchema = new mongoose.Schema({
+  productId: { type: Number, unique: true },
+  name: String,
+  quantity: Number,
+  price: Number
+}, { collection: 'product' });
+const Product = mongoose.model('ProductModel', productSchema, 'product');
+
+const logSchema = new mongoose.Schema({
+  type: String,
+  productId: Number,
+  amount: Number,
+  timestamp: Date,
+  ipfsHash: String
+});
+const Log = mongoose.model('Log', logSchema);
+
+const PINATA_JWT = process.env.PINATA_JWT;
+const PINATA_API = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
+
+// Thêm sản phẩm
+app.post('/add-product', async (req, res) => {
+  try {
+    console.log('Add product body:', req.body);
+    const { name, quantity, price } = req.body;
+    const customId = Date.now();
+    const product = new Product({ productId: customId, name, quantity: parseInt(quantity), price: parseFloat(price) });
+    await product.save();
+    console.log('Added product ID:', customId);
+    res.json({ success: true, product });
+  } catch (error) {
+    console.error('Add product error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Nhập kho (sửa Pinata upload bằng JSON)
+app.post('/import', async (req, res) => {
+  try {
+    console.log('Import body:', req.body);
+    const { productId, amount } = req.body;
+    const product = await Product.findOne({ productId: parseInt(productId) });
+    if (!product) {
+      console.log('Product not found for ID:', productId);
+      return res.status(404).json({ error: 'Product not found with ID: ' + productId });
+    }
+    product.quantity += parseInt(amount);
+    await product.save();
+
+    const log = new Log({ type: 'import', productId: parseInt(productId), amount: parseInt(amount), timestamp: new Date() });
+    // Upload JSON to Pinata (raw JSON)
+    const pinataBody = {
+      pinataContent: log.toObject(),
+      pinataMetadata: { name: `Log-import-${log.timestamp}` }
+    };
+    console.log('Uploading to Pinata:', pinataBody);
+    const response = await fetch(PINATA_API, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${PINATA_JWT}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(pinataBody)
+    });
+    const result = await response.json();
+    console.log('Pinata result:', result);
+    if (result.IpfsHash) {
+      log.ipfsHash = result.IpfsHash;
+      await log.save();
+      res.json({ success: true, log, ipfsLink: `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}` });
+    } else {
+      console.log('Pinata failed, saving log without IPFS');
+      await log.save();  // Lưu log ngay cả khi Pinata fail
+      res.json({ success: true, log, ipfsLink: null, warning: 'IPFS upload failed, log saved locally' });
+    }
+  } catch (error) {
+    console.error('Import error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Xuất kho (tương tự)
+app.post('/export', async (req, res) => {
+  try {
+    console.log('Export body:', req.body);
+    const { productId, amount } = req.body;
+    const product = await Product.findOne({ productId: parseInt(productId) });
+    if (!product) {
+      console.log('Product not found for ID:', productId);
+      return res.status(404).json({ error: 'Product not found with ID: ' + productId });
+    }
+    if (product.quantity < parseInt(amount)) return res.status(400).json({ error: 'Insufficient stock' });
+    product.quantity -= parseInt(amount);
+    await product.save();
+
+    const log = new Log({ type: 'export', productId: parseInt(productId), amount: parseInt(amount), timestamp: new Date() });
+    const pinataBody = {
+      pinataContent: log.toObject(),
+      pinataMetadata: { name: `Log-export-${log.timestamp}` }
+    };
+    console.log('Uploading to Pinata:', pinataBody);
+    const response = await fetch(PINATA_API, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${PINATA_JWT}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(pinataBody)
+    });
+    const result = await response.json();
+    console.log('Pinata result:', result);
+    if (result.IpfsHash) {
+      log.ipfsHash = result.IpfsHash;
+      await log.save();
+      res.json({ success: true, log, ipfsLink: `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}` });
+    } else {
+      console.log('Pinata failed, saving log without IPFS');
+      await log.save();
+      res.json({ success: true, log, ipfsLink: null, warning: 'IPFS upload failed, log saved locally' });
+    }
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Xem kho
+app.get('/warehouse', async (req, res) => {
+  try {
+    const products = await Product.find().sort({ productId: -1 });
+    console.log('Warehouse query:', products.length, 'products');
+    res.json(products);
+  } catch (error) {
+    console.error('Warehouse error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Xem logs (lấy tất cả, không filter)
+app.get('/logs', async (req, res) => {
+  try {
+    const logs = await Log.find().sort({ timestamp: -1 });
+    console.log('Logs query:', logs.length, 'logs');
+    res.json(logs);
+  } catch (error) {
+    console.error('Logs error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(process.env.PORT || 5000, () => console.log('Backend on port 5000'));
