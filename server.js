@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const fetch = require('node-fetch');
 require('dotenv').config();
+const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
@@ -35,6 +36,69 @@ const Log = mongoose.model('Log', logSchema);
 
 const PINATA_JWT = process.env.PINATA_JWT;
 const PINATA_API = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
+
+// ================= BLOCKCHAIN =================
+
+class Block {
+  constructor(index, timestamp, data, previousHash = '') {
+    this.index = index;
+    this.timestamp = timestamp;
+    this.data = data; // { type, productId, amount, ipfsHash }
+    this.previousHash = previousHash;
+    this.hash = this.calculateHash();
+  }
+
+  calculateHash() {
+    return crypto
+      .createHash('sha256')
+      .update(
+        this.index +
+        this.previousHash +
+        this.timestamp +
+        JSON.stringify(this.data)
+      )
+      .digest('hex');
+  }
+}
+
+class Blockchain {
+  constructor() {
+    this.chain = [this.createGenesisBlock()];
+  }
+
+  createGenesisBlock() {
+    return new Block(0, new Date().toISOString(), 'Genesis Block', '0');
+  }
+
+  getLatestBlock() {
+    return this.chain[this.chain.length - 1];
+  }
+
+  addBlock(data) {
+    const newBlock = new Block(
+      this.chain.length,
+      new Date().toISOString(),
+      data,
+      this.getLatestBlock().hash
+    );
+    this.chain.push(newBlock);
+    return newBlock;
+  }
+
+  isChainValid() {
+    for (let i = 1; i < this.chain.length; i++) {
+      const current = this.chain[i];
+      const previous = this.chain[i - 1];
+
+      if (current.hash !== current.calculateHash()) return false;
+      if (current.previousHash !== previous.hash) return false;
+    }
+    return true;
+  }
+}
+
+// Blockchain instance
+const warehouseBlockchain = new Blockchain();
 
 // Thêm sản phẩm
 app.post('/add-product', async (req, res) => {
@@ -85,7 +149,20 @@ app.post('/import', async (req, res) => {
     if (result.IpfsHash) {
       log.ipfsHash = result.IpfsHash;
       await log.save();
-      res.json({ success: true, log, ipfsLink: `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}` });
+
+      // === ADD BLOCK TO BLOCKCHAIN ===
+      warehouseBlockchain.addBlock({
+        type: 'import',
+        productId: parseInt(productId),
+        amount: parseInt(amount),
+        ipfsHash: result.IpfsHash
+      });
+
+      res.json({
+        success: true,
+        log,
+        ipfsLink: `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}`
+      });
     } else {
       console.log('Pinata failed, saving log without IPFS');
       await log.save();  // Lưu log ngay cả khi Pinata fail
@@ -130,7 +207,20 @@ app.post('/export', async (req, res) => {
     if (result.IpfsHash) {
       log.ipfsHash = result.IpfsHash;
       await log.save();
-      res.json({ success: true, log, ipfsLink: `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}` });
+
+      // === ADD BLOCK TO BLOCKCHAIN ===
+      warehouseBlockchain.addBlock({
+        type: 'export',
+        productId: parseInt(productId),
+        amount: parseInt(amount),
+        ipfsHash: result.IpfsHash
+      });
+
+      res.json({
+        success: true,
+        log,
+        ipfsLink: `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}`
+      });
     } else {
       console.log('Pinata failed, saving log without IPFS');
       await log.save();
@@ -152,6 +242,15 @@ app.get('/warehouse', async (req, res) => {
     console.error('Warehouse error:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// View blockchain
+app.get('/blockchain', (req, res) => {
+  res.json({
+    valid: warehouseBlockchain.isChainValid(),
+    length: warehouseBlockchain.chain.length,
+    chain: warehouseBlockchain.chain
+  });
 });
 
 // Xem logs (lấy tất cả, không filter)
