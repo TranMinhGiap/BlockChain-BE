@@ -129,9 +129,9 @@ const warehouseBlockchain = new Blockchain();
 app.post('/add-product', async (req, res) => {
   try {
     console.log('Add product body:', req.body);
-    const { name, quantity, price } = req.body;
+    const { name, quantity, price, thumbnail, status } = req.body;
     const customId = Date.now();
-    const product = new Product(req.body);
+    const product = new Product({ productId: customId, name, quantity: parseInt(quantity), price: parseFloat(price), thumbnail: thumbnail, status: status });
     await product.save();
     console.log('Added product ID:', customId);
     res.json({ success: true, product });
