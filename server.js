@@ -141,6 +141,25 @@ app.post('/add-product', async (req, res) => {
   }
 });
 
+// Chỉnh sửa trạng thái
+app.patch('/product/change-status/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log("id:", id);
+    console.log('Edit status product body:', req.body);
+    await Product.updateOne(
+      { _id: id },
+      {
+        status: req.body.status
+      }
+    )
+    res.json({ success: true, message: "Cập nhật trạng thái thành công" });
+  } catch (error) {
+    console.error('Add product error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Nhập kho (sửa Pinata upload bằng JSON)
 app.post('/import', async (req, res) => {
   try {
