@@ -288,6 +288,17 @@ app.get('/warehouse', async (req, res) => {
   }
 });
 
+// Xem sản phẩm hoạt động trong kho
+app.get('/warehouse/active', async (req, res) => {
+  try {
+    const products = await Product.find({ status: "active" }).sort({ productId: -1 });
+    res.json(products);
+  } catch (error) {
+    console.error('Warehouse error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // View blockchain
 app.get('/blockchain', (req, res) => {
   res.json({
