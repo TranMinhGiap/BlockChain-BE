@@ -6,6 +6,14 @@ const fetch = require('node-fetch');
 require('dotenv').config();
 const crypto = require('crypto');
 
+const multer = require('multer');
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+const uploadCloudMiddleware = require('./middlewares/uploadCloud.middleware')
+
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
@@ -17,13 +25,30 @@ mongoose.connect(process.env.MONGO_URL)
   .catch(err => console.error('MongoDB connection error:', err));
 
 // Models
-const productSchema = new mongoose.Schema({
-  productId: { type: Number, unique: true },
-  name: String,
-  quantity: Number,
-  price: Number
-}, { collection: 'product' });
-const Product = mongoose.model('ProductModel', productSchema, 'product');
+const productSchema = new mongoose.Schema(
+  {
+    productId: { type: Number, unique: true },
+
+    name: { type: String, required: true },
+
+    thumbnail: { type: String, default: '' },
+
+    status: {
+      type: String,
+      enum: ['active', 'inactive'], 
+      default: 'active',             
+      required: true,
+    },
+
+    quantity: { type: Number, default: 0 },
+
+    price: { type: Number, required: true },
+  },
+  { collection: 'product', timestamps: true }
+);
+
+const Product = mongoose.model('ProductModel', productSchema);
+
 
 const logSchema = new mongoose.Schema({
   type: String,
@@ -106,7 +131,7 @@ app.post('/add-product', async (req, res) => {
     console.log('Add product body:', req.body);
     const { name, quantity, price } = req.body;
     const customId = Date.now();
-    const product = new Product({ productId: customId, name, quantity: parseInt(quantity), price: parseFloat(price) });
+    const product = new Product(req.body);
     await product.save();
     console.log('Added product ID:', customId);
     res.json({ success: true, product });
@@ -261,6 +286,23 @@ app.get('/logs', async (req, res) => {
     res.json(logs);
   } catch (error) {
     console.error('Logs error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Upload Image
+app.post('/upload-cloud-image', upload.array('upload', 10), uploadCloudMiddleware.upload, async (req, res) => {
+  try {
+    if (req.body.urls) {
+      if (req.body.urls.length === 1) {
+        res.json({ url: req.body.urls[0] }); 
+      } else {
+        res.json({ urls: req.body.urls }); 
+      }
+    } else {
+      res.json({ urls: [] }); 
+    }
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
