@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const fetch = require('node-fetch');
 require('dotenv').config();
 const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 
 const multer = require('multer');
 const upload = multer({
@@ -54,10 +55,26 @@ const logSchema = new mongoose.Schema({
   type: String,
   productId: Number,
   amount: Number,
+  user: {
+    id: String,
+    username: String,
+    role: String
+  },
   timestamp: Date,
   ipfsHash: String
 });
 const Log = mongoose.model('Log', logSchema);
+
+const userSchema = new mongoose.Schema({
+  username: { type: String, unique: true },
+  password: String, // hash
+  role: {
+    type: String,
+    enum: ['admin', 'staff'],
+    default: 'staff'
+  }
+});
+const User = mongoose.model('User', userSchema);
 
 const PINATA_JWT = process.env.PINATA_JWT;
 const PINATA_API = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
@@ -164,7 +181,7 @@ app.patch('/product/change-status/:id', async (req, res) => {
 app.post('/import', async (req, res) => {
   try {
     console.log('Import body:', req.body);
-    const { productId, amount } = req.body;
+    const { productId, amount, user } = req.body;
     const product = await Product.findOne({ productId: parseInt(productId) });
     if (!product) {
       console.log('Product not found for ID:', productId);
@@ -173,7 +190,13 @@ app.post('/import', async (req, res) => {
     product.quantity += parseInt(amount);
     await product.save();
 
-    const log = new Log({ type: 'import', productId: parseInt(productId), amount: parseInt(amount), timestamp: new Date() });
+    const log = new Log({
+      type: 'import',
+      productId: parseInt(productId),
+      amount: parseInt(amount),
+      user,
+      timestamp: new Date()
+    });
     // Upload JSON to Pinata (raw JSON)
     const pinataBody = {
       pinataContent: log.toObject(),
@@ -222,7 +245,7 @@ app.post('/import', async (req, res) => {
 app.post('/export', async (req, res) => {
   try {
     console.log('Export body:', req.body);
-    const { productId, amount } = req.body;
+    const { productId, amount, user } = req.body;
     const product = await Product.findOne({ productId: parseInt(productId) });
     if (!product) {
       console.log('Product not found for ID:', productId);
@@ -232,7 +255,13 @@ app.post('/export', async (req, res) => {
     product.quantity -= parseInt(amount);
     await product.save();
 
-    const log = new Log({ type: 'export', productId: parseInt(productId), amount: parseInt(amount), timestamp: new Date() });
+    const log = new Log({
+      type: 'export',
+      productId: parseInt(productId),
+      amount: parseInt(amount),
+      user,
+      timestamp: new Date()
+    });
     const pinataBody = {
       pinataContent: log.toObject(),
       pinataMetadata: { name: `Log-export-${log.timestamp}` }
@@ -336,5 +365,43 @@ app.post('/upload-cloud-image', upload.array('upload', 10), uploadCloudMiddlewar
     res.status(500).json({ error: error.message });
   }
 });
+
+// Login
+app.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    const user = await User.findOne({ username });
+    if (!user) return res.status(401).json({ error: 'User not found' });
+
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(401).json({ error: 'Wrong password' });
+
+    res.json({
+      _id: user._id,
+      username: user.username,
+      role: user.role
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// (async () => {
+//   const count = await User.countDocuments();
+//   if (count === 0) {
+//     await User.create({
+//       username: 'admin',
+//       password: await bcrypt.hash('123456', 10),
+//       role: 'admin'
+//     });
+//     await User.create({
+//       username: 'staff1',
+//       password: await bcrypt.hash('123456', 10),
+//       role: 'staff'
+//     });
+//     console.log('Seed users created');
+//   }
+// })();
 
 app.listen(process.env.PORT || 5000, () => console.log('Backend on port 5000'));
